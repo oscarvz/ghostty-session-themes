@@ -11,10 +11,8 @@ import unittest
 from unittest.mock import patch
 
 sys.dont_write_bytecode = True
-ROOT = Path(__file__).resolve().parent
-spec = importlib.util.spec_from_file_location('session_themes', ROOT / 'session-themes.py')
-themes = importlib.util.module_from_spec(spec)
-spec.loader.exec_module(themes)
+from support import CONFIG, load_themes
+themes = load_themes()
 EXPORT = ['/usr/bin/defaults', 'export', 'NSGlobalDomain', '-']
 
 
@@ -67,7 +65,7 @@ class AppearanceTests(unittest.TestCase):
 
     def test_all_families_follow_system_changes_without_changing_rotation(self):
         with tempfile.TemporaryDirectory(prefix='ghostty-appearance-regression-') as directory:
-            shutil.copy2(ROOT / 'session-themes.conf', Path(directory) / 'session-themes.conf')
+            shutil.copy2(CONFIG, Path(directory) / 'session-themes.conf')
             manager = themes.Themes(directory)
             manager.set_setting('enabled', 'true')
             manager.set_setting('appearance', 'auto')
@@ -88,7 +86,7 @@ class AppearanceTests(unittest.TestCase):
 
     def test_forced_appearance_still_works_without_querying_macos(self):
         with tempfile.TemporaryDirectory(prefix='ghostty-forced-appearance-') as directory:
-            shutil.copy2(ROOT / 'session-themes.conf', Path(directory) / 'session-themes.conf')
+            shutil.copy2(CONFIG, Path(directory) / 'session-themes.conf')
             manager = themes.Themes(directory)
             manager.set_setting('enabled', 'true')
             manager.set_setting('appearance', 'light')

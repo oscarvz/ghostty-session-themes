@@ -7,9 +7,9 @@ function session-theme() {
     emulate -L zsh
     local result
     if [[ ${1:-} == reload ]]; then
-        /usr/bin/python3 "$_ghostty_session_theme_directory/session-themes.py" _init
+        "$_ghostty_session_theme_directory/session-theme" _init
     else
-        /usr/bin/python3 "$_ghostty_session_theme_directory/session-themes.py" "$@"
+        "$_ghostty_session_theme_directory/session-theme" "$@"
     fi
     result=$?
     if (( result == 0 )); then
@@ -21,7 +21,7 @@ function session-theme() {
 function _ghostty_session_theme_precmd() {
     emulate -L zsh
     [[ ${_ghostty_session_theme_paused:-0} == 0 && -t 0 && -t 1 ]] || return 0
-    /usr/bin/python3 "$_ghostty_session_theme_directory/session-themes.py" _sync || {
+    "$_ghostty_session_theme_directory/session-theme" _sync || {
         typeset -g _ghostty_session_theme_paused=1
     }
     return 0
@@ -35,7 +35,7 @@ if [[ $TERM_PROGRAM == ghostty && -z $SSH_CONNECTION && -z $TMUX && -z $STY && -
         export GHOSTTY_SESSION_THEME_ID="$(/usr/bin/uuidgen)"
     fi
     typeset -g _ghostty_session_theme_paused=0
-    /usr/bin/python3 "$_ghostty_session_theme_directory/session-themes.py" _init || {
+    "$_ghostty_session_theme_directory/session-theme" _init || {
         typeset -g _ghostty_session_theme_paused=1
     }
     autoload -Uz add-zsh-hook

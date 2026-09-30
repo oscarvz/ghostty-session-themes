@@ -13,10 +13,12 @@
 @property NSTask *task;
 @property NSUInteger generation;
 @property BOOL pending;
+@property BOOL stopping;
 @end
 
 @implementation ThemeObserver
 - (void)requestUpdate {
+    if (self.stopping) return;
     NSArray *names = @[NSAppearanceNameAqua, NSAppearanceNameDarkAqua];
     NSString *match = [NSApp.effectiveAppearance bestMatchFromAppearancesWithNames:names];
     self.mode = [match isEqualToString:NSAppearanceNameDarkAqua] ? @"dark" : @"light";
@@ -29,11 +31,11 @@
     });
 }
 - (void)apply {
-    if (self.task || !self.pending) return;
+    if (self.stopping || self.task || !self.pending) return;
     self.pending = NO;
     NSTask *task = [NSTask new];
-    task.executableURL = [NSURL fileURLWithPath:@"/usr/bin/python3"];
-    task.arguments = @[[self.directory stringByAppendingPathComponent:@"session-themes.py"], @"_broadcast", self.mode];
+    task.executableURL = [NSURL fileURLWithPath:[self.directory stringByAppendingPathComponent:@"session-theme"]];
+    task.arguments = @[@"_broadcast", self.mode];
     task.standardInput = NSFileHandle.fileHandleWithNullDevice;
     task.standardOutput = NSFileHandle.fileHandleWithNullDevice;
     task.standardError = NSFileHandle.fileHandleWithNullDevice;
@@ -42,7 +44,7 @@
         dispatch_async(dispatch_get_main_queue(), ^{
             ThemeObserver *observer = weakSelf;
             observer.task = nil;
-            if (finished.terminationStatus == 20) [NSApp terminate:nil];
+            if (observer.stopping || finished.terminationStatus == 20) [NSApp terminate:nil];
             else [observer apply];
         });
     };
@@ -57,15 +59,26 @@
         if (task.running) [task terminate];
     });
 }
+- (void)stop {
+    self.stopping = YES;
+    self.pending = NO;
+    // Keep the instance lock until the last writer finishes. An upgrade must not
+    // replace the helper while an old child is still updating terminal state.
+    if (!self.task) [NSApp terminate:nil];
+}
 - (void)applicationDidFinishLaunching:(NSNotification *)notification {
     (void)notification;
     [NSApp addObserver:self forKeyPath:@"effectiveAppearance"
                options:NSKeyValueObservingOptionInitial | NSKeyValueObservingOptionNew context:NULL];
     [NSTimer scheduledTimerWithTimeInterval:2 repeats:YES block:^(NSTimer *timer) {
         (void)timer;
+        if ([NSFileManager.defaultManager fileExistsAtPath:[self.directory stringByAppendingPathComponent:@".disabled"]]) {
+            [self stop];
+            return;
+        }
         NSString *path = [self.directory stringByAppendingPathComponent:@"session-themes.conf"];
         NSDate *date = [[NSFileManager.defaultManager attributesOfItemAtPath:path error:nil] fileModificationDate];
-        if (!date) { [NSApp terminate:nil]; return; }
+        if (!date) { [self stop]; return; }
         if (![date isEqualToDate:self.configDate]) {
             self.configDate = date;
             [self requestUpdate];

@@ -7,3 +7,9 @@ __pycache__/
 /session-themes-listener-status.json
 /session-themes-backups/
 /.session-themes*.lock
+/runtime.json
+/session-theme
+/.disabled
+/.install.lock
+/backups/
+*.dSYM/

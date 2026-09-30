@@ -48,6 +48,18 @@ def atomic_write(path, text):
             os.unlink(temporary)
 
 
+def setting_text(text, key, value):
+    section = False
+    lines = text.splitlines(keepends=True)
+    for index, line in enumerate(lines):
+        if line.strip().startswith('['):
+            section = line.strip() == '[settings]'
+        if section and re.match(r'^\s*' + re.escape(key) + r'\s*=', line):
+            lines[index] = key + ' = ' + value + '\n'
+            return ''.join(lines)
+    raise ValueError('Missing setting: ' + key)
+
+
 @contextlib.contextmanager
 def locked(path):
     with open(path, 'a', encoding='utf-8') as stream:
@@ -178,9 +190,12 @@ def write_terminal(tty, sequence):
 
 
 class Themes:
-    def __init__(self, directory=DIRECTORY, resources=RESOURCES):
+    def __init__(self, directory=DIRECTORY, resources=None, ghostty=None):
         self.directory = Path(directory)
-        self.resources = Path(resources)
+        runtime = self.directory / 'runtime.json'
+        self.runtime = json.loads(runtime.read_text(encoding='utf-8')) if runtime.exists() else {}
+        self.resources = Path(resources or self.runtime.get('resources', RESOURCES))
+        self.ghostty = str(ghostty or self.runtime.get('ghostty', GHOSTTY))
         self.config = self.directory / 'session-themes.conf'
         self.state_path = self.directory / 'session-themes-state.json'
         self.lock_path = self.directory / '.session-themes.lock'
@@ -233,23 +248,13 @@ class Themes:
 
     def set_setting(self, key, value):
         with locked(self.lock_path):
-            text = self.config.read_text(encoding='utf-8')
-            section = False
-            lines = text.splitlines(keepends=True)
-            for index, line in enumerate(lines):
-                if line.strip().startswith('['):
-                    section = line.strip() == '[settings]'
-                if section and re.match(r'^\s*' + key + r'\s*=', line):
-                    lines[index] = key + ' = ' + value + '\n'
-                    atomic_write(self.config, ''.join(lines))
-                    return
-            raise ValueError('Missing setting: ' + key)
+            atomic_write(self.config, setting_text(self.config.read_text(encoding='utf-8'), key, value))
 
     def validate(self):
         _, _, _, pairs = self.settings()
         for mode in ('dark', 'light'):
             result = subprocess.run(
-                [GHOSTTY, '+list-themes', '--plain', '--color=' + mode],
+                [self.ghostty, '+list-themes', '--plain', '--color=' + mode],
                 text=True, capture_output=True, timeout=5, check=True,
             )
             names = {re.sub(r' \([^)]*\)$', '', line) for line in result.stdout.splitlines()}
@@ -358,7 +363,8 @@ class Themes:
         return False
 
     def ensure_listener(self):
-        if self.live_updates() and not self.listener_running():
+        if (not (self.directory / '.disabled').exists()
+                and self.live_updates() and not self.listener_running()):
             subprocess.Popen([str(self.directory / 'session-themes-observer')],
                              stdin=subprocess.DEVNULL, stdout=subprocess.DEVNULL,
                              stderr=subprocess.DEVNULL, start_new_session=True, close_fds=True)
@@ -381,6 +387,7 @@ class Themes:
             if health.get('error'):
                 live += ' — ' + health['error']
         return '\n'.join((
+            'Version: ' + self.runtime.get('version', 'development'),
             'New sessions: ' + ('ON' if enabled else 'OFF'),
             'Appearance: ' + mode,
             'Live updates: ' + live,
@@ -409,6 +416,17 @@ def main(arguments):
     action = arguments[0] if arguments else 'status'
     terminal = current_terminal()
     try:
+        if (manager.directory / '.disabled').exists():
+            if action == '_broadcast':
+                return 20
+            if action in ('_init', '_sync'):
+                if terminal:
+                    print(RESET, end='', flush=True)
+                return 0
+            if action == 'status':
+                print('Session themes installation is disabled. Run the installer to enable it.')
+                return 0
+            raise ValueError('Installation is disabled. Run the installer to enable it.')
         if action == '_broadcast':
             if not manager.live_updates():
                 return 20

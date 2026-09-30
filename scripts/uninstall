@@ -1,0 +1,3 @@
+#!/bin/sh
+set -eu
+exec "${GHOSTTY_SESSION_THEMES_PYTHON:-python3}" "$(dirname "$0")/manage.py" uninstall "$@"

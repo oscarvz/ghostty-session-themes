@@ -12,17 +12,15 @@ import unittest
 from unittest.mock import patch
 
 sys.dont_write_bytecode = True
-ROOT = Path(__file__).resolve().parent
-spec = importlib.util.spec_from_file_location('session_themes', ROOT / 'session-themes.py')
-themes = importlib.util.module_from_spec(spec)
-spec.loader.exec_module(themes)
+from support import CONFIG, load_themes
+themes = load_themes()
 
 
 class LiveTests(unittest.TestCase):
     def setUp(self):
         temporary = tempfile.TemporaryDirectory(prefix='ghostty-live-tests-')
         self.addCleanup(temporary.cleanup)
-        shutil.copy2(ROOT / 'session-themes.conf', Path(temporary.name) / 'session-themes.conf')
+        shutil.copy2(CONFIG, Path(temporary.name) / 'session-themes.conf')
         self.manager = themes.Themes(temporary.name)
         self.manager.set_setting('enabled', 'true')
         self.manager.set_setting('appearance', 'auto')
