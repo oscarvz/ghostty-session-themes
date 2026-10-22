@@ -4,12 +4,17 @@ Start with `session-theme status` and `session-theme validate`.
 
 | Symptom | Action |
 | --- | --- |
-| Command not found | Open an interactive zsh shell or source the installed `session-themes.zsh`. Check the target zshrc. |
+| Command not found | Open an interactive Bash/zsh shell or source the installed `session-themes.bash` / `session-themes.zsh` for your shell. Check the startup paths printed by the installer. |
+| Bash works when sourced but not in a new window | Check whether your window starts a login shell. Default installs cover `.bashrc` and the active login profile; with `--rc-file`, ensure that file is loaded. |
+| Installer still selects zsh after changing your default shell | Upgrades keep their selected shell. Uninstall, then reinstall with `--shell bash`. Settings are retained. |
 | New sessions use the default | Run `on`. Existing default sessions need `next` to join the rotation. |
 | Changes only happen at prompts | Set `live on` and `mode auto`; check observer status for errors. |
 | Mode stays light or dark | `mode auto` restores system tracking for assigned families. |
 | A theme was renamed or removed | Edit `session-theme config`, then run `validate` and `reload`. |
 | Appearance error after a macOS upgrade | Check the installed version. The fallback parses a plist; it does not match error text. Pin `mode light` or `mode dark` temporarily if needed. |
+| Linux automatic mode cannot read appearance | Check `gdbus` and the Settings portal command in the README from the same desktop session. Install the appropriate portal backend, or pin `mode light` / `mode dark`. |
+| Linux always uses light in automatic mode | The portal may report no preference (`0`). Check its output; pin `mode dark` if your desktop does not publish its preference. |
+| Linux theme resources cannot be found | Set `GHOSTTY_RESOURCES_DIR` before installation or pass `--resources /path/to/ghostty/themes`. |
 | A program reset colours | Run `reload` after it exits. |
 | A program paints its own background | Configure that application's theme separately. |
 | Python was moved or removed | Reinstall with `GHOSTTY_SESSION_THEMES_PYTHON=/new/path/python3`. |
@@ -22,6 +27,8 @@ that has loaded the function, use the installed launcher:
 
 ```sh
 "$HOME/Library/Application Support/ghostty-session-themes/session-theme" status
+# Linux (or use your custom --prefix):
+"${XDG_DATA_HOME:-$HOME/.local/share}/ghostty-session-themes/session-theme" status
 ```
 
 `session-themes-listener-status.json` records the last background result. A lock

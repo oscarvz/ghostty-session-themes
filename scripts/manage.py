@@ -22,15 +22,19 @@ themes = importlib.util.module_from_spec(spec)
 spec.loader.exec_module(themes)
 BEGIN = '# >>> Ghostty session themes >>>'
 END = '# <<< Ghostty session themes <<<'
-PAYLOAD = ('session-themes.py', 'session-themes.zsh', 'session-themes-observer',
+PAYLOAD = ('session-themes.py', 'session-themes.zsh', 'session-themes.bash', 'session-themes-observer',
            'session-theme', 'runtime.json')
 
 
 def default_prefix():
+    if sys.platform == 'linux':
+        return Path(os.environ.get('XDG_DATA_HOME') or Path.home() / '.local/share') / 'ghostty-session-themes'
     return Path.home() / 'Library/Application Support/ghostty-session-themes'
 
 
 def default_legacy():
+    if sys.platform == 'linux':
+        return Path(os.environ.get('XDG_CONFIG_HOME') or Path.home() / '.config') / 'ghostty'
     return Path.home() / 'Library/Application Support/com.mitchellh.ghostty'
 
 
@@ -58,28 +62,79 @@ def replace_hook(text, replacement):
     if not starts and not ends:
         return text + ('\n' if text and not text.endswith('\n') else '') + replacement
     if len(starts) != 1 or len(ends) != 1 or starts[0] >= ends[0]:
-        raise ValueError('Ambiguous Ghostty session themes block in zshrc; fix its markers first.')
+        raise ValueError('Ambiguous Ghostty session themes block in shell configuration; fix its markers first.')
     return ''.join(lines[:starts[0]]) + replacement + ''.join(lines[ends[0] + 1:])
 
 
-def hook(prefix):
-    loader = shlex.quote(str(prefix / 'session-themes.zsh'))
+def hook(prefix, shell='zsh'):
+    loader = shlex.quote(str(prefix / ('session-themes.' + shell)))
+    source = '[[ -r ' + loader + ' ]] && source ' + loader
+    if shell == 'bash':
+        # A login profile may also be read by a POSIX shell such as dash.
+        source = 'if [ -n "${BASH_VERSION:-}" ] && [ -r ' + loader + ' ]; then . ' + loader + '; fi'
     return (BEGIN + '\n# Controls: session-theme status | on | off | live on | live off\n'
             '# Settings: ' + str(prefix / 'session-themes.conf') + '\n'
-            '[[ -r ' + loader + ' ]] && source ' + loader + '\n' + END + '\n')
+            + source + '\n' + END + '\n')
 
 
-def discover_ghostty(override=None):
+def shell_configuration(args, runtime, *, allow_change=False):
+    zshrc = getattr(args, 'zshrc', None)
+    requested_shell = getattr(args, 'shell', None)
+    if zshrc and requested_shell not in (None, 'zsh'):
+        raise ValueError('--zshrc requires --shell zsh. Use --rc-file for Bash.')
+    previous_shell = runtime.get('shell', 'zsh')
+    shell = requested_shell or ('zsh' if zshrc else previous_shell if runtime else
+                               Path(os.environ.get('SHELL') or 'zsh').name)
+    if shell not in ('bash', 'zsh'):
+        raise ValueError('Choose a supported shell with --shell bash or --shell zsh.')
+    previous_files = runtime.get('rc_files') or ([runtime['zshrc']] if runtime.get('zshrc') else [])
+    override = getattr(args, 'rc_file', None) or zshrc
+    if override:
+        files = [Path(override)]
+    elif runtime and shell == previous_shell:
+        files = [Path(path) for path in previous_files]
+    elif shell == 'zsh':
+        files = [Path(os.environ.get('ZDOTDIR') or Path.home()) / '.zshrc']
+    else:
+        files = [Path.home() / '.bashrc']
+        profiles = [Path.home() / name for name in ('.bash_profile', '.bash_login', '.profile')]
+        files.append(next((path for path in profiles if path.is_file()), profiles[0]))
+    files = list(dict.fromkeys(path.expanduser().resolve() for path in files))
+    changed = shell != previous_shell or list(map(str, files)) != previous_files
+    if runtime and changed and not (allow_change and (args.prefix / '.disabled').exists()):
+        raise ValueError('Uninstall the current shell integration before choosing another shell or startup file.')
+    return shell, files
+
+
+def discover_ghostty(override=None, resources_override=None):
     candidates = [override] if override else [shutil.which('ghostty'),
         '/Applications/Ghostty.app', Path.home() / 'Applications/Ghostty.app']
     for candidate in filter(None, candidates):
-        binary = Path(candidate).expanduser().resolve()
+        # Preserve executable wrappers such as /snap/bin/ghostty -> /usr/bin/snap.
+        binary = Path(candidate).expanduser().absolute()
         if binary.suffix == '.app':
             binary = binary / 'Contents/MacOS/ghostty'
-        resources = binary.parent.parent / 'Resources/ghostty/themes'
-        if binary.is_file() and os.access(binary, os.X_OK) and resources.is_dir():
-            return binary, resources
-    raise ValueError('Cannot find a Ghostty macOS app bundle. Use --ghostty /path/to/Ghostty.app.')
+        if not binary.is_file() or not os.access(binary, os.X_OK):
+            continue
+        if resources_override:
+            resources = [Path(resources_override).expanduser()]
+        elif sys.platform == 'linux':
+            resources = []
+            if os.environ.get('GHOSTTY_RESOURCES_DIR'):
+                resources.append(Path(os.environ['GHOSTTY_RESOURCES_DIR']) / 'themes')
+            resources.extend(path.parent.parent / 'share/ghostty/themes' for path in (binary, binary.resolve()))
+            if binary == Path('/snap/bin/ghostty'):
+                resources.append(Path('/snap/ghostty/current/share/ghostty/themes'))
+            data_home = Path(os.environ.get('XDG_DATA_HOME') or Path.home() / '.local/share')
+            resources.extend(path / 'ghostty/themes' for path in
+                             [data_home] + [Path(p) for p in os.environ.get('XDG_DATA_DIRS', '/usr/local/share:/usr/share').split(':') if p])
+        else:
+            resources = [binary.resolve().parent.parent / 'Resources/ghostty/themes']
+        for directory in resources:
+            if directory.is_dir():
+                return binary, directory.absolute()
+    raise ValueError('Cannot find Ghostty and its themes. Use --ghostty /path/to/ghostty '
+                     '(or /path/to/Ghostty.app on macOS) and --resources /path/to/ghostty/themes.')
 
 
 def read_runtime(prefix):
@@ -98,10 +153,10 @@ def stop_listener(prefix):
 
 class Backup:
     """Journal exactly the files we change; leave unrelated shell edits alone."""
-    def __init__(self, prefix, action, zshrc, legacy=None):
+    def __init__(self, prefix, action, rc_files, legacy=None):
         self.directory = prefix / 'backups' / (datetime.now(timezone.utc).strftime('%Y%m%dT%H%M%S%f') + '-' + action)
         self.directory.mkdir(parents=True, mode=0o700)
-        self.manifest = dict(format=1, action=action, prefix=str(prefix), zshrc=str(zshrc),
+        self.manifest = dict(format=1, action=action, prefix=str(prefix), rc_files=list(map(str, rc_files)),
                              legacy=str(legacy) if legacy else None,
                              installed_before=(prefix / 'runtime.json').exists(), files={})
         self.flush()
@@ -161,14 +216,21 @@ def launcher(python, helper):
 
 
 def prepare_payload(stage, prefix, runtime, configuration):
-    for name in ('session-themes.py', 'session-themes.zsh'):
+    for name in ('session-themes.py', 'session-themes.zsh', 'session-themes.bash'):
         shutil.copyfile(ROOT / 'src' / name, stage / name)
     (stage / 'runtime.json').write_text(json.dumps(runtime, indent=2) + '\n')
     (stage / 'session-themes.conf').write_text(configuration)
     (stage / 'session-theme').write_text(launcher(runtime['python'], prefix / 'session-themes.py'))
-    subprocess.run(['/usr/bin/xcrun', 'clang', '-fobjc-arc', '-Wall', '-Wextra', '-Werror',
-                    '-framework', 'AppKit', '-o', str(stage / 'session-themes-observer'),
-                    str(ROOT / 'src/session-themes-observer.m')], check=True, capture_output=True, text=True)
+    if sys.platform == 'darwin':
+        subprocess.run(['/usr/bin/xcrun', 'clang', '-fobjc-arc', '-Wall', '-Wextra', '-Werror',
+                        '-framework', 'AppKit', '-o', str(stage / 'session-themes-observer'),
+                        str(ROOT / 'src/session-themes-observer.m')], check=True, capture_output=True, text=True)
+    else:
+        (stage / 'session-themes-observer').write_text(
+            '#!/bin/sh\nexec ' + shlex.quote(str(prefix / 'session-theme')) + ' _observe\n')
+        settings = themes.Themes(stage).settings()
+        if settings[1] == 'auto':
+            themes.system_appearance()
     themes.Themes(stage).validate()
 
 
@@ -177,12 +239,7 @@ def install(args):
     runtime = read_runtime(prefix)
     if not runtime and any((prefix / name).exists() for name in PAYLOAD):
         raise ValueError('Unrecognised files in the installation directory; choose a different --prefix.')
-    zshrc = args.zshrc or (Path(runtime['zshrc']) if runtime else None)
-    if zshrc is None:
-        zshrc = Path(os.environ.get('ZDOTDIR', str(Path.home()))) / '.zshrc'
-    zshrc = zshrc.expanduser().resolve()
-    if runtime and zshrc != Path(runtime['zshrc']):
-        raise ValueError('Uninstall the current shell integration before choosing a different --zshrc.')
+    shell, rc_files = shell_configuration(args, runtime, allow_change=True)
     legacy = args.legacy_dir
     if runtime or not all((legacy / name).is_file() for name in ('session-themes.py', 'session-themes.conf')):
         legacy = None
@@ -190,7 +247,10 @@ def install(args):
         raise ValueError('Choose a new installation directory to migrate the legacy helper.')
     if legacy and '# Managed compatibility entry point.' in (legacy / 'session-themes.py').read_text():
         raise ValueError('The legacy helper was already migrated. Upgrade its existing --prefix instead.')
-    binary, resources = discover_ghostty(args.ghostty or runtime.get('ghostty'))
+    if legacy and shell != 'zsh':
+        raise ValueError('Migrate the legacy zsh helper with --shell zsh first, then uninstall before switching shells.')
+    resources_override = getattr(args, 'resources', None) or runtime.get('resources_override')
+    binary, resources = discover_ghostty(args.ghostty or runtime.get('ghostty'), resources_override)
     config_path = prefix / 'session-themes.conf'
     if config_path.exists() and args.config:
         raise ValueError('Existing settings are preserved. Edit them with session-theme config instead of --config.')
@@ -201,18 +261,20 @@ def install(args):
     parser.read_string(configuration)
     if not parser.has_option('settings', 'live_updates'):
         configuration = configuration.replace('[settings]', '[settings]\nlive_updates = true', 1)
-    shell_text = zshrc.read_text() if zshrc.exists() else ''
-    new_shell_text = replace_hook(shell_text, hook(prefix))
-    unchanged = {path: digest(path) for path in (zshrc, source_config, prefix / 'runtime.json')}
+    shell_texts = {path: replace_hook(path.read_text() if path.exists() else '', hook(prefix, shell))
+                   for path in rc_files}
+    unchanged = {path: digest(path) for path in [*rc_files, source_config, prefix / 'runtime.json']}
     runtime = dict(version=(ROOT / 'VERSION').read_text().strip(), python=str(Path(sys.executable).resolve()),
-                   ghostty=str(binary), resources=str(resources), zshrc=str(zshrc),
+                   ghostty=str(binary), resources=str(resources), shell=shell, rc_files=list(map(str, rc_files)),
+                   resources_override=str(resources) if resources_override else None,
                    legacy_dir=str(legacy) if legacy else runtime.get('legacy_dir'))
     with tempfile.TemporaryDirectory(prefix='ghostty-session-themes-build-') as temporary:
         stage = Path(temporary)
         prepare_payload(stage, prefix, runtime, configuration)
-        print('Theme rotation validated; observer compiled successfully.')
+        print('Theme rotation validated; ' + ('AppKit observer compiled.' if sys.platform == 'darwin'
+                                              else 'Linux observer prepared.'))
         print('Installation:', prefix)
-        print('Shell integration:', zshrc)
+        print('Shell integration (' + shell + '):', ', '.join(map(str, rc_files)))
         if legacy:
             print('Migrate existing helper:', legacy)
         if args.check:
@@ -222,7 +284,7 @@ def install(args):
         with themes.locked(prefix / '.install.lock'):
             if any(digest(path) != checksum for path, checksum in unchanged.items()):
                 raise ValueError('Settings or shell configuration changed during preparation; run the installer again.')
-            backup = Backup(prefix, 'install', zshrc, legacy)
+            backup = Backup(prefix, 'install', rc_files, legacy)
             for path in ghostty_configs():
                 backup.snapshot(path)
             backup.snapshot(prefix / 'session-themes-state.json')
@@ -244,7 +306,8 @@ def install(args):
                     backup.write(prefix / name, (stage / name).read_bytes(), mode)
                 if not config_path.exists():
                     backup.write(config_path, configuration)
-                backup.write(zshrc, new_shell_text, stat.S_IMODE(zshrc.stat().st_mode) if zshrc.exists() else 0o600)
+                for path, text in shell_texts.items():
+                    backup.write(path, text, stat.S_IMODE(path.stat().st_mode) if path.exists() else 0o600)
                 if legacy:
                     # Old shells already hold the legacy helper path; forward them without a restart.
                     forward = ('#!/usr/bin/env python3\n# Managed compatibility entry point.\n'
@@ -261,7 +324,8 @@ def install(args):
                 raise
         themes.Themes(prefix).ensure_listener()
         print('Backup:', backup.directory)
-        print('Installed ' + runtime['version'] + '. Open a new Ghostty shell, or source ' + shlex.quote(str(prefix / 'session-themes.zsh')))
+        print('Installed ' + runtime['version'] + '. Open a new Ghostty shell, or source '
+              + shlex.quote(str(prefix / ('session-themes.' + shell))))
 
 
 def uninstall(args):
@@ -269,14 +333,15 @@ def uninstall(args):
     runtime = read_runtime(prefix)
     if not runtime:
         raise ValueError('No installed runtime at ' + str(prefix))
-    zshrc = (args.zshrc or Path(runtime['zshrc'])).expanduser().resolve()
+    _, rc_files = shell_configuration(args, runtime)
     with themes.locked(prefix / '.install.lock'):
-        backup = Backup(prefix, 'uninstall', zshrc)
+        backup = Backup(prefix, 'uninstall', rc_files)
         try:
             backup.write(prefix / '.disabled', 'Uninstalled; retained for already-open shells.\n')
             stop_listener(prefix)
-            if zshrc.exists():
-                backup.write(zshrc, replace_hook(zshrc.read_text(), ''), stat.S_IMODE(zshrc.stat().st_mode))
+            for path in rc_files:
+                if path.exists():
+                    backup.write(path, replace_hook(path.read_text(), ''), stat.S_IMODE(path.stat().st_mode))
         except Exception:
             backup.undo()
             themes.Themes(prefix).ensure_listener()
@@ -327,17 +392,21 @@ def main(argv=None):
     for command in ('install', 'uninstall'):
         sub = commands.add_parser(command)
         sub.add_argument('--prefix', type=Path, default=default_prefix())
-        sub.add_argument('--zshrc', type=Path)
+        sub.add_argument('--shell', choices=('bash', 'zsh'), help='Shell to integrate (default: $SHELL, or previous installation)')
+        target = sub.add_mutually_exclusive_group()
+        target.add_argument('--rc-file', type=Path, help='Use one custom shell startup file')
+        target.add_argument('--zshrc', type=Path, help='Compatibility alias for --shell zsh --rc-file')
         if command == 'install':
             sub.add_argument('--ghostty', type=Path, help='Ghostty .app bundle or executable')
+            sub.add_argument('--resources', type=Path, help='Directory containing Ghostty theme files')
             sub.add_argument('--config', type=Path, help='Initial settings for a fresh installation')
             sub.add_argument('--legacy-dir', type=Path, default=default_legacy())
             sub.add_argument('--check', action='store_true', help='Build and validate without installing')
     sub = commands.add_parser('restore')
     sub.add_argument('backup', type=Path)
     args = parser.parse_args(argv)
-    if sys.platform != 'darwin':
-        parser.error('The installer supports macOS only.')
+    if sys.platform not in ('darwin', 'linux'):
+        parser.error('The installer supports macOS and Linux only.')
     if hasattr(args, 'prefix'):
         args.prefix = args.prefix.expanduser().resolve()
     if getattr(args, 'legacy_dir', None):

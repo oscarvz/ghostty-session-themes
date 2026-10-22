@@ -1,5 +1,16 @@
 # Changelog
 
+## Unreleased
+
+- Bash 3.2+ support alongside zsh, preserving prompt callbacks and command exit status.
+- Explicit shell/custom startup selection, Bash login and non-login integration,
+  and backward-compatible upgrades for existing zsh installations.
+- Linux installation with XDG paths, executable/resource discovery and Snap support.
+- Linux Settings portal observer for automatic light/dark switching in idle and busy
+  terminals, sharing rendering and state with macOS. Pinned modes need no portal.
+- Portable session UUID generation and Linux pseudo-terminal ownership checks.
+- Linux lifecycle and installer regressions, cross-platform setup and contributor docs.
+
 ## 0.1.0 — 2026-09-30
 
 First repository release, extracted from the working personal installation.

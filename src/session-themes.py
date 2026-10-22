@@ -10,11 +10,13 @@ import os
 from pathlib import Path
 import plistlib
 import re
+import selectors
 import stat
 import subprocess
 import sys
 import tempfile
 import time
+import uuid
 from xml.parsers.expat import ExpatError
 
 
@@ -113,6 +115,8 @@ def colour_sequence(values):
 
 
 def system_appearance():
+    if sys.platform == 'linux':
+        return linux_appearance()
     # Light mode omits the key. Read a plist instead of matching defaults'
     # missing-key error text, which changes across macOS versions and locales.
     result = subprocess.run(
@@ -133,6 +137,27 @@ def system_appearance():
     if appearance is None or appearance == 'Light':
         return 'light'
     raise ValueError('Cannot read macOS appearance: unrecognised preference value.')
+
+
+PORTAL = ['--session', '--dest', 'org.freedesktop.portal.Desktop',
+          '--object-path', '/org/freedesktop/portal/desktop']
+
+
+def linux_appearance():
+    message = ('Cannot read Linux desktop appearance. Install gdbus and a Settings portal backend, '
+               'or set appearance = light or dark explicitly.')
+    try:
+        result = subprocess.run(['gdbus', 'call'] + PORTAL + [
+            '--method', 'org.freedesktop.portal.Settings.Read',
+            'org.freedesktop.appearance', 'color-scheme'],
+            capture_output=True, text=True, timeout=2, env={**os.environ, 'LC_ALL': 'C'})
+    except (OSError, subprocess.SubprocessError) as error:
+        raise ValueError(message) from error
+    match = re.fullmatch(r'\s*\(<{1,2}uint32 (\d+)>{1,2},\)\s*', result.stdout)
+    if result.returncode or not match:
+        raise ValueError(message)
+    # The portal defines 0 (and unknown values) as no preference; use light.
+    return 'dark' if int(match[1]) == 1 else 'light'
 
 
 def process_alive(pid):
@@ -174,8 +199,9 @@ def owns_terminal(entry, owners):
 
 def write_terminal(tty, sequence):
     """Send output only to a local, user-owned terminal. Never send input."""
-    if not re.fullmatch(r'/dev/ttys[0-9]+', tty):
-        raise ValueError('Not a local macOS terminal.')
+    pattern = r'/dev/pts/[0-9]+' if sys.platform == 'linux' else r'/dev/ttys[0-9]+'
+    if not re.fullmatch(pattern, tty):
+        raise ValueError('Not a local terminal for this platform.')
     flags = os.O_WRONLY | os.O_NOCTTY | os.O_NONBLOCK | os.O_NOFOLLOW
     descriptor = os.open(tty, flags)
     try:
@@ -292,7 +318,7 @@ class Themes:
             entry = state['sessions'].get(session_id)
             created = entry is None
             if created:
-                # A UUID distinguishes new sessions even when macOS reuses a TTY.
+                # A UUID distinguishes new sessions even when the OS reuses a TTY.
                 cutoff = time.time() - 30 * 86400
                 state['sessions'] = {key: value for key, value in state['sessions'].items()
                                      if value['created'] >= cutoff or process_alive(value['owner_pid'])}
@@ -373,6 +399,11 @@ class Themes:
         atomic_write(self.directory / 'session-themes-listener-status.json',
                      json.dumps(dict(time=time.time(), **values), indent=2) + '\n')
 
+    def broadcast_event(self, appearance):
+        updated, failed = self.broadcast(appearance)
+        self.broadcast_status(appearance=appearance, updated=updated, failed=failed,
+                              error=(str(failed) + ' terminal update(s) failed; prompt fallback remains active.') if failed else None)
+
     def status(self, session_id):
         enabled, mode, _, pairs = self.settings()
         state = self.read_state()
@@ -397,6 +428,94 @@ class Themes:
         ))
 
 
+class LinuxObserver:
+    """Observe portal events; poll only settings and the maintenance marker."""
+    def __init__(self, manager):
+        self.manager = manager
+        self.monitor = None
+        self.selector = selectors.DefaultSelector()
+
+    def stop_monitor(self):
+        if self.monitor is None:
+            return
+        self.selector.unregister(self.monitor.stdout)
+        self.monitor.terminate()
+        try:
+            self.monitor.wait(timeout=2)
+        except subprocess.TimeoutExpired:
+            self.monitor.kill()
+            self.monitor.wait(timeout=2)
+        self.monitor.stdout.close()
+        self.monitor = None
+
+    def start_monitor(self):
+        self.monitor = subprocess.Popen(['gdbus', 'monitor'] + PORTAL,
+            stdin=subprocess.DEVNULL, stdout=subprocess.PIPE, stderr=subprocess.DEVNULL,
+            env={**os.environ, 'LC_ALL': 'C'}, close_fds=True)
+        self.selector.register(self.monitor.stdout, selectors.EVENT_READ)
+
+    def run(self):
+        # Keep this lock until all synchronous writes and the monitor have stopped.
+        with open(self.manager.directory / '.session-themes-observer.lock', 'a+') as lock:
+            try:
+                fcntl.flock(lock, fcntl.LOCK_EX | fcntl.LOCK_NB)
+            except BlockingIOError:
+                return 0
+            lock.seek(0)
+            lock.truncate()
+            lock.write(str(os.getpid()) + '\n')
+            lock.flush()
+            try:
+                self.watch()
+            except (OSError, ValueError, KeyError, configparser.Error, subprocess.SubprocessError) as error:
+                self.manager.broadcast_status(error=str(error))
+                return 1
+            finally:
+                self.stop_monitor()
+                self.selector.close()
+        return 0
+
+    def watch(self):
+        signature = None
+        mode = None
+        check_at = pending_at = time.monotonic()
+        buffer = b''
+        while True:
+            now = time.monotonic()
+            if now >= check_at:
+                if (self.manager.directory / '.disabled').exists() or not self.manager.live_updates():
+                    return
+                current = self.manager.config.stat().st_mtime_ns
+                if current != signature:
+                    signature = current
+                    mode = self.manager.settings()[1]
+                    self.stop_monitor()
+                    buffer = b''
+                    if mode == 'auto':
+                        self.start_monitor()
+                    pending_at = now + 0.3
+                check_at = now + 2
+            if pending_at is not None and now >= pending_at:
+                appearance = system_appearance() if mode == 'auto' else mode
+                self.manager.broadcast_event(appearance)
+                pending_at = None
+            timeout = max(0, min(check_at, pending_at if pending_at is not None else check_at) - time.monotonic())
+            if self.monitor is None:
+                time.sleep(timeout)
+                continue
+            for key, _ in self.selector.select(timeout):
+                data = os.read(key.fd, 65536)
+                if not data:
+                    raise ValueError('Linux appearance monitor exited; the next prompt will restart it.')
+                buffer += data
+                while b'\n' in buffer:
+                    line, buffer = buffer.split(b'\n', 1)
+                    if ((b'org.freedesktop.appearance' in line and b'color-scheme' in line)
+                            or b'is owned by' in line):
+                        # Query again after Ghostty applies its own appearance.
+                        pending_at = time.monotonic() + 0.3
+
+
 def current_terminal():
     if (os.environ.get('TERM_PROGRAM') != 'ghostty'
             or any(os.environ.get(key) for key in ('SSH_CONNECTION', 'TMUX', 'STY'))
@@ -412,10 +531,15 @@ def current_terminal():
 
 def main(arguments):
     os.umask(0o077)
+    if arguments == ['_uuid']:
+        print(uuid.uuid4())
+        return 0
     manager = Themes()
     action = arguments[0] if arguments else 'status'
     terminal = current_terminal()
     try:
+        if action == '_observe' and sys.platform == 'linux' and len(arguments) == 1:
+            return LinuxObserver(manager).run()
         if (manager.directory / '.disabled').exists():
             if action == '_broadcast':
                 return 20
@@ -432,9 +556,7 @@ def main(arguments):
                 return 20
             if len(arguments) != 2:
                 raise ValueError('Missing appearance event.')
-            updated, failed = manager.broadcast(arguments[1])
-            manager.broadcast_status(updated=updated, failed=failed,
-                                     error=(str(failed) + ' terminal update(s) failed; prompt fallback remains active.') if failed else None)
+            manager.broadcast_event(arguments[1])
         elif action == 'live':
             if len(arguments) != 2 or arguments[1] not in ('on', 'off'):
                 raise ValueError('Usage: session-theme live on|off')

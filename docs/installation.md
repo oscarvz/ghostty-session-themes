@@ -1,31 +1,60 @@
 # Installation, migration and recovery
 
-See the [README](../README.md) for prerequisites and commands. One active installation
-per shell configuration is supported. Multiple installations controlling the same
+See the [README](../README.md) for prerequisites and commands. One selected shell
+per installation prefix is supported. Multiple installations controlling the same
 terminals can compete for colours.
 
 ## Files and paths
 
 Installation copies code into the per-user prefix, creates settings on first use,
-and adds a labelled zshrc block. Upgrades retain settings and session state. Builds
+and adds labelled shell startup blocks. Upgrades retain settings and session state. Builds
 and theme validation happen before user files are changed.
 
-The default zshrc uses an exported `$ZDOTDIR`, otherwise `~/.zshrc`. Use `--zshrc`
-when ZDOTDIR is set only inside the shell. Symlinks are resolved so the link survives.
-To move integration to a different zshrc, uninstall first and select the new path.
+macOS defaults to `~/Library/Application Support/ghostty-session-themes/`; Linux
+uses `$XDG_DATA_HOME/ghostty-session-themes/`, falling back to
+`~/.local/share/ghostty-session-themes/`. Personal settings, state and backups live
+in that same prefix on either platform. `--prefix` overrides it.
+
+Linux needs no native build. In automatic mode preparation verifies that `gdbus`
+can read the desktop Settings portal. If unavailable, supply an initial `--config`
+with `appearance = light` or `dark`. `--resources /path/to/themes` handles custom
+Ghostty packages; its value is recorded for upgrades. `GHOSTTY_RESOURCES_DIR` instead
+points to the Ghostty resources directory containing `themes/`.
+
+Fresh installations choose Bash or zsh from `$SHELL`; `--shell bash|zsh` overrides it.
+Upgrades retain the recorded shell and startup paths. Older runtime metadata without
+a shell field is treated as zsh for compatibility.
+
+zsh uses an exported `$ZDOTDIR`, otherwise `~/.zshrc`. Bash uses `~/.bashrc` and
+the first existing login profile in Bash's search order: `~/.bash_profile`,
+`~/.bash_login`, `~/.profile`. If none exists, it creates `~/.bash_profile`. This covers
+both login and non-login interactive shells. A guard makes the Bash block inert
+when `.profile` is read by another shell. Repeated sourcing does not duplicate the
+prompt callback or rotate the current session.
+
+Use `--shell bash --rc-file /path/to/bashrc` or `--shell zsh --rc-file /path/to/zshrc`
+to manage just one custom file. `--zshrc /path` remains a compatibility alias for zsh.
+With a custom file, ensure your shell loads it. Symlinks are resolved so links survive.
+To switch shells or startup files, uninstall first, then reinstall with the new
+selection. Settings and assignments are retained. The installer never changes your
+login shell.
 
 Existing Ghostty `config.ghostty` and `config` files in the standard XDG and macOS
 locations are snapshotted, but never edited. These are
 [Ghostty's documented locations](https://ghostty.org/docs/config). Files referenced
 through `config-file` are not recursively backed up because this project does not
-modify them. Private backups can include your zshrc and must stay out of Git.
+modify them. Private backups can include your shell configuration and must stay out of Git.
 
 ## Legacy migration
 
 The default legacy directory is
-`~/Library/Application Support/com.mitchellh.ghostty/`. On first installation,
+`~/Library/Application Support/com.mitchellh.ghostty/` on macOS, or
+`${XDG_CONFIG_HOME:-~/.config}/ghostty/` on Linux. On first installation,
 the presence of `session-themes.py` and `session-themes.conf` triggers migration.
 Use `--legacy-dir` for another location.
+
+Migrate the earlier zsh helper with `--shell zsh` first. To use Bash afterwards,
+uninstall that integration and reinstall with `--shell bash`.
 
 Settings and assignments are imported. The old observer stops before the new one
 starts. The old Python/zsh entry points become forwarding files for existing shells.
@@ -50,13 +79,13 @@ forwarding files until shells that reference them have closed.
 Install, upgrade and uninstall print a backup directory:
 
 ```sh
-./scripts/restore "$HOME/Library/Application Support/ghostty-session-themes/backups/<timestamp>-install"
+./scripts/restore '/exact/backup/path/printed/by/the/installer'
 ```
 
 Restore verifies backup hashes and checks that managed files have not changed since
 the operation. It refuses to overwrite later edits. Compare such files with the
 numbered originals identified in `manifest.json`; do not blindly restore your whole
-zshrc. Session state is retained rather than rolled back to a snapshot.
+shell configuration. Session state is retained rather than rolled back to a snapshot.
 
 Restoring an upgrade reinstates earlier code. Restoring uninstall reinstates the
 shell integration. Restoring a fresh installation removes its integration but
