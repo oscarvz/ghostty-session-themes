@@ -1,20 +1,29 @@
 # Development
 
-Python uses the standard library and supports 3.9+. The native observer uses
-Objective-C and AppKit. No package installation is needed for tests.
+Python uses the standard library and supports 3.9+. The macOS observer uses
+Objective-C and AppKit; Linux uses the shared Python helper and `gdbus`.
+No Python package installation is needed for tests.
 
 ```sh
 python3 -m unittest discover -s tests -v
 zsh -n src/session-themes.zsh
+sh -n scripts/install scripts/uninstall scripts/restore
+```
+
+Build the native observer on **macOS only**:
+
+```sh
 mkdir -p build
 xcrun clang -fobjc-arc -Wall -Wextra -Werror -framework AppKit \
   -o build/session-themes-observer src/session-themes-observer.m
 ```
 
 Tests synthesize palettes in temporary directories. Installer tests use a fake
-Ghostty bundle and compiler output; CI separately builds the actual observer on
-macOS. Tests do not load personal zshrc files, change system appearance or write to
-live terminals. The original 16 tests were also reconstructed from the import
+Ghostty bundle/compiler on macOS and an executable/share layout on Linux. CI builds
+the actual observer on macOS. Linux checks exercise a synthetic portal event stream,
+singleton locking, settings changes, shutdown and colour writes to a private pseudo
+terminal. Tests do not load personal zshrc files, change system appearance or write to
+user terminals. The original 16 tests were also reconstructed from the import
 commit and run unchanged against the refactored helper and real Ghostty resources.
 Maintained tests preserve those assertions with portable synthetic resources.
 
@@ -46,7 +55,10 @@ source the personal zshrc. Confirm different families.
 7. Uninstall again, close temporary shells and remove the temporary directory.
 
 Headless CI cannot establish real GUI appearance notification behaviour; this check
-is separate. For migration changes, also import a copy of the older helper and call
+is separate. On Linux run it in the desktop session where Ghostty runs, with a
+working Settings portal, on each desktop you intend to support. Test both Wayland
+and X11 where available. Also verify pinned light/dark modes without `gdbus`.
+For migration changes, also import a copy of the older helper and call
 its forwarding entry point from a shell opened before migration.
 
 ## Releases
@@ -58,3 +70,12 @@ GitHub Actions runs after pushing. Publishing is separate from creating a local 
 Theme files come from Ghostty and are not vendored. The example contains names only;
 test palettes are synthetic. Runtime data, compiled binaries, personal settings and
 backups must stay out of Git.
+
+## Contributing from a fork
+
+You do not need write access to this repository. Fork it on GitHub, clone your fork,
+and add `https://github.com/oscarvz/ghostty-session-themes.git` as an `upstream` remote.
+Create a feature branch from `upstream/main`, make the change and run the checks
+above. Push the branch to your fork and open a pull request targeting
+`oscarvz/ghostty-session-themes:main`. Include the platforms tested and any GUI checks
+still needed. The maintainer reviews and merges the contribution.

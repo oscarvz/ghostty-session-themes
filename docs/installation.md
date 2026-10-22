@@ -10,6 +10,17 @@ Installation copies code into the per-user prefix, creates settings on first use
 and adds a labelled zshrc block. Upgrades retain settings and session state. Builds
 and theme validation happen before user files are changed.
 
+macOS defaults to `~/Library/Application Support/ghostty-session-themes/`; Linux
+uses `$XDG_DATA_HOME/ghostty-session-themes/`, falling back to
+`~/.local/share/ghostty-session-themes/`. Personal settings, state and backups live
+in that same prefix on either platform. `--prefix` overrides it.
+
+Linux needs no native build. In automatic mode preparation verifies that `gdbus`
+can read the desktop Settings portal. If unavailable, supply an initial `--config`
+with `appearance = light` or `dark`. `--resources /path/to/themes` handles custom
+Ghostty packages; its value is recorded for upgrades. `GHOSTTY_RESOURCES_DIR` instead
+points to the Ghostty resources directory containing `themes/`.
+
 The default zshrc uses an exported `$ZDOTDIR`, otherwise `~/.zshrc`. Use `--zshrc`
 when ZDOTDIR is set only inside the shell. Symlinks are resolved so the link survives.
 To move integration to a different zshrc, uninstall first and select the new path.
@@ -23,7 +34,8 @@ modify them. Private backups can include your zshrc and must stay out of Git.
 ## Legacy migration
 
 The default legacy directory is
-`~/Library/Application Support/com.mitchellh.ghostty/`. On first installation,
+`~/Library/Application Support/com.mitchellh.ghostty/` on macOS, or
+`${XDG_CONFIG_HOME:-~/.config}/ghostty/` on Linux. On first installation,
 the presence of `session-themes.py` and `session-themes.conf` triggers migration.
 Use `--legacy-dir` for another location.
 
@@ -50,7 +62,7 @@ forwarding files until shells that reference them have closed.
 Install, upgrade and uninstall print a backup directory:
 
 ```sh
-./scripts/restore "$HOME/Library/Application Support/ghostty-session-themes/backups/<timestamp>-install"
+./scripts/restore '/exact/backup/path/printed/by/the/installer'
 ```
 
 Restore verifies backup hashes and checks that managed files have not changed since

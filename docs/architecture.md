@@ -13,8 +13,17 @@ Three parts cooperate:
    time and the disabled marker; it does not poll system appearance or spawn Python
    every two seconds.
 
+On Linux, the installed observer launches `session-theme _observe`, implemented in
+the shared Python helper. It monitors `gdbus` Settings portal signals and queries
+`org.freedesktop.appearance/color-scheme` after a 300 ms debounce. Settings and the
+disabled marker are checked every two seconds; desktop appearance is not polled.
+Pinned modes do not start `gdbus`. Portal errors are reported in listener status,
+and the next prompt can restart the observer. The portal's no-preference and unknown
+values use light; explicit modes work when no Settings portal is available.
+
 The observer has no window or Dock icon. A process-held lock prevents duplicates.
-Child tasks are serialized and bounded to ten seconds. A pending event is retained.
+AppKit child tasks are serialized and bounded to ten seconds. Linux queries are
+bounded to two seconds and writes run synchronously. A pending event is retained.
 The next shell prompt can restart an observer that has exited; there is no LaunchAgent.
 
 ## Installed layout
@@ -24,7 +33,7 @@ ghostty-session-themes/
 ├── session-theme                  # Generated launcher with a Python path
 ├── session-themes.py
 ├── session-themes.zsh
-├── session-themes-observer         # Compiled locally; excluded from Git
+├── session-themes-observer         # AppKit binary or Linux launcher; excluded from Git
 ├── runtime.json                   # Detected paths, version and shell target
 ├── session-themes.conf            # Personal settings and rotation
 ├── session-themes-state.json      # Counter and assignments
@@ -57,8 +66,9 @@ written as terminal output; no command input is sent.
 State is committed after a successful background write. Failed writes invalidate
 the cached signature so the prompt hook can retry. Atomic replacement and bounded
 locks protect files. State stores UUIDs, TTYs, PIDs, timestamps and theme choices,
-never command history. The prompt fallback reads a preferences plist instead of
-matching localized `defaults` errors. Native-default appearance remains Ghostty's job.
+never command history. Targets are `/dev/ttysN` on macOS and `/dev/pts/N` on Linux.
+The prompt fallback reads a macOS preferences plist or queries the Linux Settings
+portal. Native-default appearance remains Ghostty's job.
 
 ## Installation boundary
 
@@ -67,6 +77,6 @@ validates before changing user files. A journal records affected files, permissi
 and checksums. The shell integration replaces one labelled block; duplicate or
 malformed blocks are rejected. The observer is suspended before replacing code.
 
-The generated launcher selects Python for both zsh and AppKit. Runtime metadata
+The generated launcher selects Python for zsh and either observer. Runtime metadata
 supplies Ghostty's executable and resource paths. Legacy forwarding entry points
 let already-open shells retain their session identifiers after migration.

@@ -27,10 +27,14 @@ PAYLOAD = ('session-themes.py', 'session-themes.zsh', 'session-themes-observer',
 
 
 def default_prefix():
+    if sys.platform == 'linux':
+        return Path(os.environ.get('XDG_DATA_HOME') or Path.home() / '.local/share') / 'ghostty-session-themes'
     return Path.home() / 'Library/Application Support/ghostty-session-themes'
 
 
 def default_legacy():
+    if sys.platform == 'linux':
+        return Path(os.environ.get('XDG_CONFIG_HOME') or Path.home() / '.config') / 'ghostty'
     return Path.home() / 'Library/Application Support/com.mitchellh.ghostty'
 
 
@@ -69,17 +73,35 @@ def hook(prefix):
             '[[ -r ' + loader + ' ]] && source ' + loader + '\n' + END + '\n')
 
 
-def discover_ghostty(override=None):
+def discover_ghostty(override=None, resources_override=None):
     candidates = [override] if override else [shutil.which('ghostty'),
         '/Applications/Ghostty.app', Path.home() / 'Applications/Ghostty.app']
     for candidate in filter(None, candidates):
-        binary = Path(candidate).expanduser().resolve()
+        # Preserve executable wrappers such as /snap/bin/ghostty -> /usr/bin/snap.
+        binary = Path(candidate).expanduser().absolute()
         if binary.suffix == '.app':
             binary = binary / 'Contents/MacOS/ghostty'
-        resources = binary.parent.parent / 'Resources/ghostty/themes'
-        if binary.is_file() and os.access(binary, os.X_OK) and resources.is_dir():
-            return binary, resources
-    raise ValueError('Cannot find a Ghostty macOS app bundle. Use --ghostty /path/to/Ghostty.app.')
+        if not binary.is_file() or not os.access(binary, os.X_OK):
+            continue
+        if resources_override:
+            resources = [Path(resources_override).expanduser()]
+        elif sys.platform == 'linux':
+            resources = []
+            if os.environ.get('GHOSTTY_RESOURCES_DIR'):
+                resources.append(Path(os.environ['GHOSTTY_RESOURCES_DIR']) / 'themes')
+            resources.extend(path.parent.parent / 'share/ghostty/themes' for path in (binary, binary.resolve()))
+            if binary == Path('/snap/bin/ghostty'):
+                resources.append(Path('/snap/ghostty/current/share/ghostty/themes'))
+            data_home = Path(os.environ.get('XDG_DATA_HOME') or Path.home() / '.local/share')
+            resources.extend(path / 'ghostty/themes' for path in
+                             [data_home] + [Path(p) for p in os.environ.get('XDG_DATA_DIRS', '/usr/local/share:/usr/share').split(':') if p])
+        else:
+            resources = [binary.resolve().parent.parent / 'Resources/ghostty/themes']
+        for directory in resources:
+            if directory.is_dir():
+                return binary, directory.absolute()
+    raise ValueError('Cannot find Ghostty and its themes. Use --ghostty /path/to/ghostty '
+                     '(or /path/to/Ghostty.app on macOS) and --resources /path/to/ghostty/themes.')
 
 
 def read_runtime(prefix):
@@ -166,9 +188,16 @@ def prepare_payload(stage, prefix, runtime, configuration):
     (stage / 'runtime.json').write_text(json.dumps(runtime, indent=2) + '\n')
     (stage / 'session-themes.conf').write_text(configuration)
     (stage / 'session-theme').write_text(launcher(runtime['python'], prefix / 'session-themes.py'))
-    subprocess.run(['/usr/bin/xcrun', 'clang', '-fobjc-arc', '-Wall', '-Wextra', '-Werror',
-                    '-framework', 'AppKit', '-o', str(stage / 'session-themes-observer'),
-                    str(ROOT / 'src/session-themes-observer.m')], check=True, capture_output=True, text=True)
+    if sys.platform == 'darwin':
+        subprocess.run(['/usr/bin/xcrun', 'clang', '-fobjc-arc', '-Wall', '-Wextra', '-Werror',
+                        '-framework', 'AppKit', '-o', str(stage / 'session-themes-observer'),
+                        str(ROOT / 'src/session-themes-observer.m')], check=True, capture_output=True, text=True)
+    else:
+        (stage / 'session-themes-observer').write_text(
+            '#!/bin/sh\nexec ' + shlex.quote(str(prefix / 'session-theme')) + ' _observe\n')
+        settings = themes.Themes(stage).settings()
+        if settings[1] == 'auto':
+            themes.system_appearance()
     themes.Themes(stage).validate()
 
 
@@ -190,7 +219,8 @@ def install(args):
         raise ValueError('Choose a new installation directory to migrate the legacy helper.')
     if legacy and '# Managed compatibility entry point.' in (legacy / 'session-themes.py').read_text():
         raise ValueError('The legacy helper was already migrated. Upgrade its existing --prefix instead.')
-    binary, resources = discover_ghostty(args.ghostty or runtime.get('ghostty'))
+    resources_override = getattr(args, 'resources', None) or runtime.get('resources_override')
+    binary, resources = discover_ghostty(args.ghostty or runtime.get('ghostty'), resources_override)
     config_path = prefix / 'session-themes.conf'
     if config_path.exists() and args.config:
         raise ValueError('Existing settings are preserved. Edit them with session-theme config instead of --config.')
@@ -206,11 +236,13 @@ def install(args):
     unchanged = {path: digest(path) for path in (zshrc, source_config, prefix / 'runtime.json')}
     runtime = dict(version=(ROOT / 'VERSION').read_text().strip(), python=str(Path(sys.executable).resolve()),
                    ghostty=str(binary), resources=str(resources), zshrc=str(zshrc),
+                   resources_override=str(resources) if resources_override else None,
                    legacy_dir=str(legacy) if legacy else runtime.get('legacy_dir'))
     with tempfile.TemporaryDirectory(prefix='ghostty-session-themes-build-') as temporary:
         stage = Path(temporary)
         prepare_payload(stage, prefix, runtime, configuration)
-        print('Theme rotation validated; observer compiled successfully.')
+        print('Theme rotation validated; ' + ('AppKit observer compiled.' if sys.platform == 'darwin'
+                                              else 'Linux observer prepared.'))
         print('Installation:', prefix)
         print('Shell integration:', zshrc)
         if legacy:
@@ -330,14 +362,15 @@ def main(argv=None):
         sub.add_argument('--zshrc', type=Path)
         if command == 'install':
             sub.add_argument('--ghostty', type=Path, help='Ghostty .app bundle or executable')
+            sub.add_argument('--resources', type=Path, help='Directory containing Ghostty theme files')
             sub.add_argument('--config', type=Path, help='Initial settings for a fresh installation')
             sub.add_argument('--legacy-dir', type=Path, default=default_legacy())
             sub.add_argument('--check', action='store_true', help='Build and validate without installing')
     sub = commands.add_parser('restore')
     sub.add_argument('backup', type=Path)
     args = parser.parse_args(argv)
-    if sys.platform != 'darwin':
-        parser.error('The installer supports macOS only.')
+    if sys.platform not in ('darwin', 'linux'):
+        parser.error('The installer supports macOS and Linux only.')
     if hasattr(args, 'prefix'):
         args.prefix = args.prefix.expanduser().resolve()
     if getattr(args, 'legacy_dir', None):

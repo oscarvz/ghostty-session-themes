@@ -21,6 +21,11 @@ def exported(preferences, fmt=plistlib.FMT_XML):
 
 
 class AppearanceTests(unittest.TestCase):
+    def setUp(self):
+        platform = patch.object(themes.sys, 'platform', 'darwin')
+        platform.start()
+        self.addCleanup(platform.stop)
+
     def test_macos_27_missing_key_regression(self):
         def upgraded_defaults(command, **kwargs):
             if command == EXPORT:

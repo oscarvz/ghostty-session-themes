@@ -32,7 +32,7 @@ function _ghostty_session_theme_precmd() {
 if [[ $TERM_PROGRAM == ghostty && -z $SSH_CONNECTION && -z $TMUX && -z $STY && -t 0 && -t 1 ]]; then
     if [[ ${GHOSTTY_SESSION_THEME_TTY:-} != $TTY || -z ${GHOSTTY_SESSION_THEME_ID:-} ]]; then
         export GHOSTTY_SESSION_THEME_TTY="$TTY"
-        export GHOSTTY_SESSION_THEME_ID="$(/usr/bin/uuidgen)"
+        export GHOSTTY_SESSION_THEME_ID="$("$_ghostty_session_theme_directory/session-theme" _uuid)"
     fi
     typeset -g _ghostty_session_theme_paused=0
     "$_ghostty_session_theme_directory/session-theme" _init || {

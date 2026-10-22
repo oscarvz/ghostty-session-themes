@@ -20,6 +20,9 @@ spec.loader.exec_module(installer)
 
 class InstallerTests(unittest.TestCase):
     def setUp(self):
+        platform = patch.object(installer.sys, 'platform', 'darwin')
+        platform.start()
+        self.addCleanup(platform.stop)
         temporary = tempfile.TemporaryDirectory(prefix='ghostty-install-tests-')
         self.addCleanup(temporary.cleanup)
         self.directory = Path(temporary.name).resolve()
