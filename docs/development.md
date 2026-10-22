@@ -7,6 +7,7 @@ No Python package installation is needed for tests.
 ```sh
 python3 -m unittest discover -s tests -v
 zsh -n src/session-themes.zsh
+bash -n src/session-themes.bash
 sh -n scripts/install scripts/uninstall scripts/restore
 ```
 
@@ -22,10 +23,15 @@ Tests synthesize palettes in temporary directories. Installer tests use a fake
 Ghostty bundle/compiler on macOS and an executable/share layout on Linux. CI builds
 the actual observer on macOS. Linux checks exercise a synthetic portal event stream,
 singleton locking, settings changes, shutdown and colour writes to a private pseudo
-terminal. Tests do not load personal zshrc files, change system appearance or write to
+terminal. Tests do not load personal shell startup files, change system appearance or write to
 user terminals. The original 16 tests were also reconstructed from the import
 commit and run unchanged against the refactored helper and real Ghostty resources.
 Maintained tests preserve those assertions with portable synthetic resources.
+
+Bash tests run real shells on private pseudo terminals and check nested identity,
+prompt callbacks, exit status, startup paths, upgrades and recovery. CI uses
+`/bin/bash` explicitly so macOS checks its bundled Bash 3.2; array prompt callbacks
+are tested on Bash 5.1+, where Bash supports executing them.
 
 After compiling, `python3 tests/check_native_lifecycle.py` checks that the native
 observer waits for an in-flight writer before shutting down. It needs a macOS GUI
@@ -44,6 +50,11 @@ test_dir=$(mktemp -d)
 Open two temporary Ghostty windows running `zsh -f`. Source the installed
 `session-themes.zsh` using the actual temporary path in each. These shells must not
 source the personal zshrc. Confirm different families.
+
+Repeat for Bash using `--shell bash --rc-file "$test_dir/bashrc"` in a separate
+prefix. Start test shells with `bash --noprofile --norc` and source the installed
+`session-themes.bash`. Do not source personal startup files. Check both shell hooks
+with an existing prompt customization.
 
 1. Leave one idle and run `sleep 60` in the other.
 2. Toggle system light → dark → light. Both should change variant without changing

@@ -2,6 +2,9 @@
 
 ## Unreleased
 
+- Bash 3.2+ support alongside zsh, preserving prompt callbacks and command exit status.
+- Explicit shell/custom startup selection, Bash login and non-login integration,
+  and backward-compatible upgrades for existing zsh installations.
 - Linux installation with XDG paths, executable/resource discovery and Snap support.
 - Linux Settings portal observer for automatic light/dark switching in idle and busy
   terminals, sharing rendering and state with macOS. Pinned modes need no portal.

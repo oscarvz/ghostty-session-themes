@@ -4,7 +4,9 @@ Start with `session-theme status` and `session-theme validate`.
 
 | Symptom | Action |
 | --- | --- |
-| Command not found | Open an interactive zsh shell or source the installed `session-themes.zsh`. Check the target zshrc. |
+| Command not found | Open an interactive Bash/zsh shell or source the installed `session-themes.bash` / `session-themes.zsh` for your shell. Check the startup paths printed by the installer. |
+| Bash works when sourced but not in a new window | Check whether your window starts a login shell. Default installs cover `.bashrc` and the active login profile; with `--rc-file`, ensure that file is loaded. |
+| Installer still selects zsh after changing your default shell | Upgrades keep their selected shell. Uninstall, then reinstall with `--shell bash`. Settings are retained. |
 | New sessions use the default | Run `on`. Existing default sessions need `next` to join the rotation. |
 | Changes only happen at prompts | Set `live on` and `mode auto`; check observer status for errors. |
 | Mode stays light or dark | `mode auto` restores system tracking for assigned families. |

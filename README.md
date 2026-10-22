@@ -5,7 +5,7 @@ variant in sync with macOS or Linux. This makes windows, tabs and splits easier 
 
 - Rotate through ten paired theme families, or define your own list.
 - Follow system appearance at an idle prompt and while a command is running.
-- Keep a session's family when opening a nested zsh shell.
+- Keep a session's family when opening a nested Bash or zsh shell.
 - Pin light/dark mode, choose the next family, or restore Ghostty's native default.
 - Control everything from one settings file and the `session-theme` command.
 - Back up affected files before installation, upgrade and uninstall.
@@ -18,7 +18,7 @@ and the desktop Settings portal on Linux.
 ## Requirements
 
 - macOS or Linux with Ghostty installed.
-- zsh for interactive terminal sessions.
+- Bash **3.2 or newer** (including macOS's bundled Bash), or zsh.
 - Python **3.9 or newer**.
 
 On **macOS**, Apple's Command Line Tools (or Xcode) are also required:
@@ -50,7 +50,7 @@ also use light. Without a working portal, copy `config/session-themes.conf`, set
 `appearance = light` or `dark`, and install with `--config /path/to/your.conf`.
 Pinned modes work without `gdbus` and still follow edits to the settings file.
 
-Other shells, SSH, tmux and screen remain outside the supported scope. Linux GUI
+Shells other than Bash/zsh, SSH, tmux and screen remain outside the supported scope. Linux GUI
 appearance behaviour should also be checked using the [interactive checklist](docs/development.md).
 
 ## Install
@@ -62,9 +62,16 @@ cd ghostty-session-themes
 ./scripts/install
 ```
 
+Fresh installs select Bash or zsh from `$SHELL`. To choose explicitly:
+
+```sh
+./scripts/install --shell bash
+# Or: ./scripts/install --shell zsh
+```
+
 `--check` prepares the platform observer and validates theme pairs without changing installed
 files. No `sudo` is needed. Open a new Ghostty terminal to load the hook, or run the
-`source` command printed by the installer in an existing zsh session.
+`source` command printed by the installer in an existing session of the selected shell.
 
 The default installation directory is:
 
@@ -74,9 +81,12 @@ The default installation directory is:
 | Linux | `${XDG_DATA_HOME:-~/.local/share}/ghostty-session-themes/` |
 
 It contains installed code, personal settings, state and timestamped backups. The
-installer adds one labelled block to `.zshrc`, respecting an exported `ZDOTDIR` and
-preserving a symlinked `.zshrc`. Code is copied; moving or deleting the checkout
-does not remove the installation.
+installer adds labelled blocks to the selected shell's startup files. For zsh it
+uses `.zshrc`, respecting an exported `ZDOTDIR`. For Bash it covers both `.bashrc`
+and the first existing login profile (`.bash_profile`, `.bash_login`, `.profile`),
+creating `.bash_profile` if none exists. Bash prompt commands and symlinked startup
+files are preserved. Code is copied; moving or deleting the checkout does not remove
+the installation. Your default shell is not changed.
 
 On macOS, Ghostty is discovered through `PATH`, `/Applications`, or `~/Applications`.
 On Linux, the installer searches `PATH`, executable-relative and XDG data locations,
@@ -87,8 +97,13 @@ On Linux, the installer searches `PATH`, executable-relative and XDG data locati
 
 # Linux: --resources points to the themes directory, not its parent.
 ./scripts/install --ghostty /opt/ghostty/bin/ghostty \
-  --resources /opt/ghostty/share/ghostty/themes --zshrc ~/.config/zsh/.zshrc
+  --resources /opt/ghostty/share/ghostty/themes --shell bash
+
+# Manage just one custom startup file instead of the default files:
+./scripts/install --shell bash --rc-file ~/.config/bash/bashrc
 ```
+
+`--zshrc` remains an alias for selecting zsh with one custom startup file.
 
 Other options are `--prefix /installation/directory`, `--config /initial/settings.ini`
 for a fresh installation, and `--legacy-dir /previous/helper/directory` for migration.
@@ -99,7 +114,7 @@ GHOSTTY_SESSION_THEMES_PYTHON=/path/to/python3 ./scripts/install
 ```
 
 Choose a long-lived interpreter, not a temporary virtual environment. Its absolute
-path is recorded in a launcher used by both zsh and the observer. Sandboxed packages
+path is recorded in a launcher used by both shells and the observer. Sandboxed packages
 other than Snap (including Flatpak) have not been validated; use an accessible
 executable and theme directory and run `--check` first.
 
@@ -162,8 +177,11 @@ git pull --ff-only
 ```
 
 Use `git switch --detach v0.1.0` before installing to select a specific release.
-Re-running install preserves settings and session state, updates the managed shell
-block once, and restarts the observer. Supply `--prefix` again if you used a custom
+Re-running install preserves settings, session state and the selected shell, updates
+managed blocks once, and restarts the observer. Existing zsh installations stay on
+zsh even when `$SHELL` is Bash. To switch shells or startup files, uninstall first,
+then reinstall with `--shell bash` or `--shell zsh`; settings and state are retained.
+Supply `--prefix` again if you used a custom
 directory. Reinstall after moving Ghostty or replacing the selected Python.
 
 The earlier helper stored beside Ghostty's configuration is detected automatically.

@@ -2,7 +2,7 @@
 
 Three parts cooperate:
 
-1. `src/session-themes.zsh` registers a UUID for each direct, local, interactive
+1. `src/session-themes.zsh` or `src/session-themes.bash` registers a UUID for each direct, local, interactive
    Ghostty terminal and calls Python at startup and before prompts. Nested shells
    on the same TTY inherit the UUID and family.
 2. `src/session-themes.py` owns settings, rotation, rendering, terminal checks,
@@ -26,6 +26,12 @@ AppKit child tasks are serialized and bounded to ten seconds. Linux queries are
 bounded to two seconds and writes run synchronously. A pending event is retained.
 The next shell prompt can restart an observer that has exited; there is no LaunchAgent.
 
+zsh uses a `precmd` hook; Bash appends to `PROMPT_COMMAND`, preserving scalar or array
+callbacks and the previous command's exit status. The Bash hook supports 3.2+ and
+does not use a DEBUG trap. Both hooks export the same session identity so manually
+loading the other shell's hook on the same TTY keeps the family. Theme and observer
+logic remains in Python.
+
 ## Installed layout
 
 ```text
@@ -33,8 +39,9 @@ ghostty-session-themes/
 ├── session-theme                  # Generated launcher with a Python path
 ├── session-themes.py
 ├── session-themes.zsh
+├── session-themes.bash
 ├── session-themes-observer         # AppKit binary or Linux launcher; excluded from Git
-├── runtime.json                   # Detected paths, version and shell target
+├── runtime.json                   # Detected paths, version, shell and startup files
 ├── session-themes.conf            # Personal settings and rotation
 ├── session-themes-state.json      # Counter and assignments
 ├── session-themes-listener-status.json
@@ -77,6 +84,6 @@ validates before changing user files. A journal records affected files, permissi
 and checksums. The shell integration replaces one labelled block; duplicate or
 malformed blocks are rejected. The observer is suspended before replacing code.
 
-The generated launcher selects Python for zsh and either observer. Runtime metadata
+The generated launcher selects Python for both shells and either observer. Runtime metadata
 supplies Ghostty's executable and resource paths. Legacy forwarding entry points
 let already-open shells retain their session identifiers after migration.
